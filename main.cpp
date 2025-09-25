@@ -2,266 +2,279 @@
 #include <iostream>
 #include <iomanip>
 #include <string>
+#include <vector>
 #include <conio.h>
-#include <hidsdi.h>
-#include <setupapi.h>
 
-#pragma comment(lib, "hid.lib")
-#pragma comment(lib, "setupapi.lib")
-#pragma comment(lib, "user32.lib")
-
-// PS4 Controller USB VID/PID
-const USHORT PS4_VENDOR_ID = 0x054C;
-const USHORT PS4_PRODUCT_ID = 0x05C4; // Wired controller
-const USHORT PS4_PRODUCT_ID_WIRELESS = 0x09CC; // Wireless controller
-
-// PS4 Controller input report structure (64 bytes for USB)
-struct PS4InputReport {
-    BYTE reportId;          // Report ID (0x01)
-    BYTE leftStickX;        // Left stick X (0-255)
-    BYTE leftStickY;        // Left stick Y (0-255)
-    BYTE rightStickX;       // Right stick X (0-255)
-    BYTE rightStickY;       // Right stick Y (0-255)
-    BYTE buttons1;          // Button group 1
-    BYTE buttons2;          // Button group 2
-    BYTE buttons3;          // Button group 3
-    BYTE leftTrigger;       // L2 trigger (0-255)
-    BYTE rightTrigger;      // R2 trigger (0-255)
-    BYTE timestamp[2];      // Timestamp
-    BYTE batteryLevel;      // Battery level
-    BYTE gyroX[2];          // Gyroscope X
-    BYTE gyroY[2];          // Gyroscope Y
-    BYTE gyroZ[2];          // Gyroscope Z
-    BYTE accelX[2];         // Accelerometer X
-    BYTE accelY[2];         // Accelerometer Y
-    BYTE accelZ[2];         // Accelerometer Z
-    BYTE reserved[5];       // Reserved bytes
-    BYTE trackpadData[37];  // Trackpad and additional data
+// PS4 Controller HID Report Structure
+#pragma pack(push, 1)
+struct PS4ControllerReport {
+    uint8_t reportId;
+    uint8_t leftStickX;
+    uint8_t leftStickY;
+    uint8_t rightStickX;
+    uint8_t rightStickY;
+    uint8_t buttons1;      // D-pad and face buttons
+    uint8_t buttons2;      // Shoulder buttons and stick clicks
+    uint8_t buttons3;      // PS, touchpad, share, options
+    uint8_t leftTrigger;
+    uint8_t rightTrigger;
+    uint8_t unknown1[2];
+    uint8_t gyroX[2];
+    uint8_t gyroY[2];
+    uint8_t gyroZ[2];
+    uint8_t accelX[2];
+    uint8_t accelY[2];
+    uint8_t accelZ[2];
+    uint8_t unknown2[5];
+    uint8_t battery;
+    uint8_t unknown3[4];
+    uint8_t touchpad[3];
+    uint8_t unknown4[21];
 };
+#pragma pack(pop)
 
-class PS4Controller {
+class PS4Visualizer {
 private:
-    HANDLE hDevice;
-    bool connected;
-    PS4InputReport lastReport;
+    HWND hwnd;
+    PS4ControllerReport lastReport = {};
+    bool controllerConnected = false;
+
+    void clearScreen() {
+        system("cls");
+    }
+
+    void gotoxy(int x, int y) {
+        COORD coord;
+        coord.X = x;
+        coord.Y = y;
+        SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), coord);
+    }
+
+    void drawStick(int x, int y, uint8_t stickX, uint8_t stickY, const std::string& name) {
+        gotoxy(x, y);
+        std::cout << name << " Stick:";
+        
+        // Draw stick position (127 is center)
+        int posX = (stickX - 127) / 25; // Scale to -5 to +5
+        int posY = (stickY - 127) / 25;
+        
+        for (int row = -2; row <= 2; row++) {
+            gotoxy(x, y + 2 + row);
+            for (int col = -5; col <= 5; col++) {
+                if (col == posX && row == posY) {
+                    std::cout << "●";
+                } else if (col == 0 && row == 0) {
+                    std::cout << "+";
+                } else {
+                    std::cout << "·";
+                }
+            }
+        }
+        
+        gotoxy(x, y + 6);
+        std::cout << "X: " << std::setw(3) << (int)stickX << " Y: " << std::setw(3) << (int)stickY;
+    }
+
+    void drawTrigger(int x, int y, uint8_t value, const std::string& name) {
+        gotoxy(x, y);
+        std::cout << name << ": ";
+        
+        // Draw trigger bar
+        int bars = (value * 10) / 255;
+        std::cout << "[";
+        for (int i = 0; i < 10; i++) {
+            if (i < bars) {
+                std::cout << "█";
+            } else {
+                std::cout << "·";
+            }
+        }
+        std::cout << "] " << std::setw(3) << (int)value;
+    }
+
+    void drawButtons() {
+        gotoxy(0, 15);
+        std::cout << "Buttons: ";
+        
+        // Face buttons (buttons1)
+        if (lastReport.buttons1 & 0x10) std::cout << "[□] "; else std::cout << "□ ";
+        if (lastReport.buttons1 & 0x20) std::cout << "[✕] "; else std::cout << "✕ ";
+        if (lastReport.buttons1 & 0x40) std::cout << "[○] "; else std::cout << "○ ";
+        if (lastReport.buttons1 & 0x80) std::cout << "[△] "; else std::cout << "△ ";
+        
+        std::cout << " | ";
+        
+        // D-pad (buttons1)
+        if ((lastReport.buttons1 & 0x0F) == 0) std::cout << "[↑] "; else std::cout << "↑ ";
+        if ((lastReport.buttons1 & 0x0F) == 4) std::cout << "[↓] "; else std::cout << "↓ ";
+        if ((lastReport.buttons1 & 0x0F) == 6) std::cout << "[←] "; else std::cout << "← ";
+        if ((lastReport.buttons1 & 0x0F) == 2) std::cout << "[→] "; else std::cout << "→ ";
+        
+        gotoxy(0, 16);
+        // Shoulder buttons (buttons2)
+        if (lastReport.buttons2 & 0x01) std::cout << "[L1] "; else std::cout << "L1 ";
+        if (lastReport.buttons2 & 0x02) std::cout << "[R1] "; else std::cout << "R1 ";
+        if (lastReport.buttons2 & 0x40) std::cout << "[L3] "; else std::cout << "L3 ";
+        if (lastReport.buttons2 & 0x80) std::cout << "[R3] "; else std::cout << "R3 ";
+        
+        std::cout << " | ";
+        
+        // System buttons (buttons3)
+        if (lastReport.buttons3 & 0x01) std::cout << "[PS] "; else std::cout << "PS ";
+        if (lastReport.buttons3 & 0x02) std::cout << "[PAD] "; else std::cout << "PAD ";
+        if (lastReport.buttons2 & 0x10) std::cout << "[SHARE] "; else std::cout << "SHARE ";
+        if (lastReport.buttons2 & 0x20) std::cout << "[OPTIONS] "; else std::cout << "OPTIONS ";
+    }
+
+    void drawHeader() {
+        gotoxy(0, 0);
+        std::cout << "=== PS4 Controller Raw Input Visualizer ===\n";
+        std::cout << "Controller: " << (controllerConnected ? "Connected" : "Disconnected") << "\n";
+        std::cout << "Press ESC to exit\n\n";
+    }
 
 public:
-    PS4Controller() : hDevice(INVALID_HANDLE_VALUE), connected(false) {
-        memset(&lastReport, 0, sizeof(lastReport));
-    }
+    PS4Visualizer() {
+        // Create invisible window for Raw Input
+        WNDCLASS wc = {};
+        wc.lpfnWndProc = WindowProc;
+        wc.hInstance = GetModuleHandle(nullptr);
+        wc.lpszClassName = L"PS4RawInput";
+        RegisterClass(&wc);
 
-    ~PS4Controller() {
-        disconnect();
-    }
+        hwnd = CreateWindow(L"PS4RawInput", L"PS4 Raw Input", 0,
+            0, 0, 0, 0, HWND_MESSAGE, nullptr, GetModuleHandle(nullptr), this);
 
-    bool connect() {
-        // Get device information set for HID devices
-        GUID hidGuid;
-        HidD_GetHidGuid(&hidGuid);
+        // Register for Raw Input from HID devices
+        RAWINPUTDEVICE rid;
+        rid.usUsagePage = 0x01;  // Generic Desktop
+        rid.usUsage = 0x05;      // Game Pad
+        rid.dwFlags = RIDEV_INPUTSINK;
+        rid.hwndTarget = hwnd;
 
-        HDEVINFO deviceInfoSet = SetupDiGetClassDevs(&hidGuid, NULL, NULL, 
-            DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
-
-        if (deviceInfoSet == INVALID_HANDLE_VALUE) {
-            return false;
+        if (!RegisterRawInputDevices(&rid, 1, sizeof(rid))) {
+            std::cerr << "Failed to register Raw Input device\n";
         }
 
-        SP_DEVICE_INTERFACE_DATA deviceInterfaceData;
-        deviceInterfaceData.cbSize = sizeof(SP_DEVICE_INTERFACE_DATA);
+        clearScreen();
+    }
 
-        // Enumerate through devices
-        for (DWORD deviceIndex = 0; 
-             SetupDiEnumDeviceInterfaces(deviceInfoSet, NULL, &hidGuid, 
-                                       deviceIndex, &deviceInterfaceData); 
-             deviceIndex++) {
+    static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+        PS4Visualizer* visualizer = nullptr;
+        
+        if (msg == WM_CREATE) {
+            CREATESTRUCT* cs = (CREATESTRUCT*)lParam;
+            visualizer = (PS4Visualizer*)cs->lpCreateParams;
+            SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)visualizer);
+        } else {
+            visualizer = (PS4Visualizer*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+        }
+
+        if (visualizer) {
+            return visualizer->HandleMessage(msg, wParam, lParam);
+        }
+        
+        return DefWindowProc(hwnd, msg, wParam, lParam);
+    }
+
+    LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
+        switch (msg) {
+        case WM_INPUT: {
+            UINT size;
+            GetRawInputData((HRAWINPUT)lParam, RID_INPUT, nullptr, &size, sizeof(RAWINPUTHEADER));
             
-            // Get required size for device interface detail
-            DWORD requiredSize = 0;
-            SetupDiGetDeviceInterfaceDetail(deviceInfoSet, &deviceInterfaceData, 
-                                          NULL, 0, &requiredSize, NULL);
-
-            // Allocate memory for device interface detail
-            PSP_DEVICE_INTERFACE_DETAIL_DATA deviceInterfaceDetailData = 
-                (PSP_DEVICE_INTERFACE_DETAIL_DATA)malloc(requiredSize);
-            
-            if (deviceInterfaceDetailData) {
-                deviceInterfaceDetailData->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA);
-
-                // Get device interface detail
-                if (SetupDiGetDeviceInterfaceDetail(deviceInfoSet, &deviceInterfaceData,
-                                                  deviceInterfaceDetailData, requiredSize,
-                                                  NULL, NULL)) {
-                    
-                    // Try to open device
-                    HANDLE testHandle = CreateFile(deviceInterfaceDetailData->DevicePath,
-                        GENERIC_READ | GENERIC_WRITE,
-                        FILE_SHARE_READ | FILE_SHARE_WRITE,
-                        NULL, OPEN_EXISTING, 0, NULL);
-
-                    if (testHandle != INVALID_HANDLE_VALUE) {
-                        // Get device attributes
-                        HIDD_ATTRIBUTES attributes;
-                        attributes.Size = sizeof(HIDD_ATTRIBUTES);
-
-                        if (HidD_GetAttributes(testHandle, &attributes)) {
-                            // Check if this is a PS4 controller
-                            if (attributes.VendorID == PS4_VENDOR_ID &&
-                                (attributes.ProductID == PS4_PRODUCT_ID ||
-                                 attributes.ProductID == PS4_PRODUCT_ID_WIRELESS)) {
-                                
-                                hDevice = testHandle;
-                                connected = true;
-                                free(deviceInterfaceDetailData);
-                                SetupDiDestroyDeviceInfoList(deviceInfoSet);
-                                return true;
-                            }
-                        }
-                        CloseHandle(testHandle);
+            std::vector<BYTE> buffer(size);
+            if (GetRawInputData((HRAWINPUT)lParam, RID_INPUT, buffer.data(), &size, sizeof(RAWINPUTHEADER)) == size) {
+                RAWINPUT* raw = (RAWINPUT*)buffer.data();
+                
+                if (raw->header.dwType == RIM_TYPEHID) {
+                    // Check if this is a PS4 controller (approximate check)
+                    if (raw->data.hid.dwSizeHid >= sizeof(PS4ControllerReport)) {
+                        controllerConnected = true;
+                        memcpy(&lastReport, raw->data.hid.bRawData, sizeof(PS4ControllerReport));
+                        updateDisplay();
                     }
                 }
-                free(deviceInterfaceDetailData);
             }
+            break;
         }
-
-        SetupDiDestroyDeviceInfoList(deviceInfoSet);
-        return false;
+        }
+        return DefWindowProc(hwnd, msg, wParam, lParam);
     }
 
-    void disconnect() {
-        if (hDevice != INVALID_HANDLE_VALUE) {
-            CloseHandle(hDevice);
-            hDevice = INVALID_HANDLE_VALUE;
-        }
-        connected = false;
-    }
-
-    bool readInput() {
-        if (!connected || hDevice == INVALID_HANDLE_VALUE) {
-            return false;
-        }
-
-        BYTE buffer[64];
-        DWORD bytesRead;
-
-        if (ReadFile(hDevice, buffer, sizeof(buffer), &bytesRead, NULL)) {
-            if (bytesRead >= sizeof(PS4InputReport)) {
-                memcpy(&lastReport, buffer, sizeof(PS4InputReport));
-                return true;
-            }
-        }
-        return false;
-    }
-
-    void displayInput() {
-        system("cls"); // Clear screen
+    void updateDisplay() {
+        drawHeader();
         
-        std::cout << "=== PS4 Controller Input Visualization ===\n\n";
-
-        // Analog Sticks
-        std::cout << "Analog Sticks:\n";
-        std::cout << "  Left Stick:  X=" << std::setw(3) << (int)lastReport.leftStickX 
-                  << " Y=" << std::setw(3) << (int)lastReport.leftStickY << "\n";
-        std::cout << "  Right Stick: X=" << std::setw(3) << (int)lastReport.rightStickX 
-                  << " Y=" << std::setw(3) << (int)lastReport.rightStickY << "\n\n";
-
-        // Triggers
-        std::cout << "Triggers:\n";
-        std::cout << "  L2: " << std::setw(3) << (int)lastReport.leftTrigger 
-                  << " [" << std::string((int)lastReport.leftTrigger / 10, '|') 
-                  << std::string(25 - (int)lastReport.leftTrigger / 10, ' ') << "]\n";
-        std::cout << "  R2: " << std::setw(3) << (int)lastReport.rightTrigger 
-                  << " [" << std::string((int)lastReport.rightTrigger / 10, '|') 
-                  << std::string(25 - (int)lastReport.rightTrigger / 10, ' ') << "]\n\n";
-
-        // Buttons - Group 1 (buttons1)
-        std::cout << "Face Buttons:\n";
-        std::cout << "  Square:   " << ((lastReport.buttons1 & 0x10) ? "[X]" : "[ ]") << "\n";
-        std::cout << "  Cross:    " << ((lastReport.buttons1 & 0x20) ? "[X]" : "[ ]") << "\n";
-        std::cout << "  Circle:   " << ((lastReport.buttons1 & 0x40) ? "[X]" : "[ ]") << "\n";
-        std::cout << "  Triangle: " << ((lastReport.buttons1 & 0x80) ? "[X]" : "[ ]") << "\n\n";
-
-        // Shoulder Buttons
-        std::cout << "Shoulder Buttons:\n";
-        std::cout << "  L1: " << ((lastReport.buttons1 & 0x01) ? "[X]" : "[ ]") << "\n";
-        std::cout << "  R1: " << ((lastReport.buttons1 & 0x02) ? "[X]" : "[ ]") << "\n";
-        std::cout << "  L2: " << ((lastReport.buttons1 & 0x04) ? "[X]" : "[ ]") << "\n";
-        std::cout << "  R2: " << ((lastReport.buttons1 & 0x08) ? "[X]" : "[ ]") << "\n\n";
-
-        // D-Pad
-        std::cout << "D-Pad:\n";
-        BYTE dpad = lastReport.buttons1 & 0x0F;
-        if (dpad <= 7) {
-            std::cout << "  Direction: ";
-            switch(dpad) {
-                case 0: std::cout << "North\n"; break;
-                case 1: std::cout << "North-East\n"; break;
-                case 2: std::cout << "East\n"; break;
-                case 3: std::cout << "South-East\n"; break;
-                case 4: std::cout << "South\n"; break;
-                case 5: std::cout << "South-West\n"; break;
-                case 6: std::cout << "West\n"; break;
-                case 7: std::cout << "North-West\n"; break;
-            }
-        } else {
-            std::cout << "  Direction: Center\n";
+        // Draw left stick
+        drawStick(0, 4, lastReport.leftStickX, lastReport.leftStickY, "Left");
+        
+        // Draw right stick
+        drawStick(25, 4, lastReport.rightStickX, lastReport.rightStickY, "Right");
+        
+        // Draw triggers
+        drawTrigger(50, 4, lastReport.leftTrigger, "L2");
+        drawTrigger(50, 5, lastReport.rightTrigger, "R2");
+        
+        // Draw battery
+        gotoxy(50, 7);
+        std::cout << "Battery: " << std::setw(3) << (int)lastReport.battery;
+        
+        // Draw buttons
+        drawButtons();
+        
+        // Draw raw data (for debugging)
+        gotoxy(0, 18);
+        std::cout << "Raw Data: ";
+        for (int i = 0; i < 16 && i < sizeof(PS4ControllerReport); i++) {
+            std::cout << std::hex << std::setw(2) << std::setfill('0') 
+                      << (int)((uint8_t*)&lastReport)[i] << " ";
         }
-        std::cout << "\n";
-
-        // System Buttons
-        std::cout << "System Buttons:\n";
-        std::cout << "  Share:     " << ((lastReport.buttons2 & 0x10) ? "[X]" : "[ ]") << "\n";
-        std::cout << "  Options:   " << ((lastReport.buttons2 & 0x20) ? "[X]" : "[ ]") << "\n";
-        std::cout << "  L3:        " << ((lastReport.buttons2 & 0x40) ? "[X]" : "[ ]") << "\n";
-        std::cout << "  R3:        " << ((lastReport.buttons2 & 0x80) ? "[X]" : "[ ]") << "\n";
-        std::cout << "  PS Button: " << ((lastReport.buttons2 & 0x01) ? "[X]" : "[ ]") << "\n";
-        std::cout << "  Trackpad:  " << ((lastReport.buttons2 & 0x02) ? "[X]" : "[ ]") << "\n\n";
-
-        // Battery Level
-        std::cout << "Battery Level: " << (int)lastReport.batteryLevel << "\n\n";
-
-        std::cout << "Press ESC to exit...\n";
+        std::cout << std::dec;
     }
 
-    bool isConnected() const {
-        return connected;
+    void run() {
+        std::cout << "Waiting for PS4 controller input...\n";
+        std::cout << "Make sure your PS4 controller is connected via USB or Bluetooth.\n";
+        std::cout << "Press ESC to exit.\n\n";
+
+        MSG msg;
+        while (true) {
+            // Check for ESC key
+            if (_kbhit()) {
+                char key = _getch();
+                if (key == 27) { // ESC key
+                    break;
+                }
+            }
+
+            // Process Windows messages
+            while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
+                TranslateMessage(&msg);
+                DispatchMessage(&msg);
+            }
+
+            Sleep(16); // ~60 FPS
+        }
+    }
+
+    ~PS4Visualizer() {
+        if (hwnd) {
+            DestroyWindow(hwnd);
+        }
     }
 };
 
 int main() {
-    std::cout << "PS4 Controller Raw Input Reader\n";
-    std::cout << "Searching for PS4 controller...\n";
+    std::cout << "PS4 Controller Raw Input Visualizer\n";
+    std::cout << "===================================\n\n";
 
-    PS4Controller controller;
-
-    if (!controller.connect()) {
-        std::cout << "Failed to find or connect to PS4 controller.\n";
-        std::cout << "Make sure your PS4 controller is connected via USB.\n";
-        std::cout << "Press any key to exit...";
-        _getch();
-        return -1;
+    try {
+        PS4Visualizer visualizer;
+        visualizer.run();
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return 1;
     }
 
-    std::cout << "PS4 Controller connected successfully!\n";
-    std::cout << "Starting input visualization...\n";
-    Sleep(1000);
-
-    // Main input loop
-    while (true) {
-        // Check for ESC key to exit
-        if (_kbhit() && _getch() == 27) {
-            break;
-        }
-
-        if (controller.readInput()) {
-            controller.displayInput();
-        } else {
-            std::cout << "Failed to read controller input. Controller may be disconnected.\n";
-            break;
-        }
-
-        Sleep(50); // Update at ~20 FPS
-    }
-
-    std::cout << "\nExiting...\n";
     return 0;
 }
