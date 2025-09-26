@@ -277,7 +277,7 @@ private:
 
         // raw hex dump (first N bytes of the report)
         constexpr size_t HEX_DUMP_BYTES = 24;
-        console.writeAt(0, 18, "Raw Data: " + Console::bytesToHex(reinterpret_cast<const uint8_t*>(&r), std::min(sizeof(r), HEX_DUMP_BYTES)));
+        console.writeAt(0, 18, "Raw Data: " + Console::bytesToHex(reinterpret_cast<const uint8_t*>(&r), min(sizeof(r), HEX_DUMP_BYTES)));
     }
 
     void drawStick(int x, int y, uint8_t rawX, uint8_t rawY, const std::string& name) {
@@ -297,8 +297,6 @@ private:
 
         float nx = norm(rawX);
         float ny = norm(rawY);
-        // In many controllers, Y decreases when pushed up; invert so that up is negative row index
-        ny = -ny;
 
         int posX = static_cast<int>(std::round(nx * HALF_W));
         int posY = static_cast<int>(std::round(ny * HALF_H));
