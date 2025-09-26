@@ -21,6 +21,27 @@ This program is a Windows console application that listens for input from a conn
 * **ESC to exit**
   Press `ESC` at any time to quit the program.
 
+## Console Output
+
+```
+=== PS4 Controller Raw Input Visualizer (refactored) ===
+Press ESC to exit. Make sure controller is connected (USB/Bluetooth).
+
+Left Stick:                   Right Stick:                  L2: [..........]   0
+...........                   ...........                   R2: [######....] 174
+..@........                   ...........
+.....+.....                   .....+.....                   Battery:   0
+...........                   .........@.
+...........                   ...........
+X:  52 Y:  61                 X: 235 Y: 203
+
+Buttons:  SQR   CRO  [CIR]  TRI
+D-Pad: Neutral
+ L1   R1   L3   R3   |  PS   PAD   SHARE   OPTIONS
+Raw Data: 01 34 3d eb cb 48 08 58 00 ae 4e c5 00 c7 ff fe ff fb ff 54 03 29 21 12
+
+```
+
 ---
 
 ## Requirements
