@@ -40,37 +40,340 @@ struct PS4ControllerReport {
 };
 #pragma pack(pop)
 
-// Small console helper (RAII) -- hides the cursor while running and provides
-// small screen manipulation helpers without calling system("cls").
+// Input mapper class for converting controller input to mouse/keyboard
+class InputMapper {
+private:
+    struct ButtonState {
+        bool current = false;
+        bool previous = false;
+        
+        bool justPressed() const { return current && !previous; }
+        bool justReleased() const { return !current && previous; }
+        void update(bool newState) {
+            previous = current;
+            current = newState;
+        }
+    };
+
+    ButtonState crossButton;
+    ButtonState squareButton;
+    ButtonState circleButton;
+    ButtonState triangleButton;
+    ButtonState l1Button;
+    ButtonState r1Button;
+    ButtonState l3Button;
+    ButtonState r3Button;
+    ButtonState shareButton;
+    ButtonState optionsButton;
+    
+    // Mouse sensitivity settings
+    float mouseSensitivity = 2.0f;
+    float deadzone = 0.15f;
+    
+    // Previous stick positions for smooth mouse movement
+    float prevLeftX = 0.0f;
+    float prevLeftY = 0.0f;
+    float prevRightX = 0.0f;
+    float prevRightY = 0.0f;
+
+public:
+    void processInput(const PS4ControllerReport& report) {
+        // Update button states
+        crossButton.update(report.buttons1 & 0x20);      // Cross button
+        squareButton.update(report.buttons1 & 0x10);     // Square button
+        circleButton.update(report.buttons1 & 0x40);     // Circle button
+        triangleButton.update(report.buttons1 & 0x80);   // Triangle button
+        l1Button.update(report.buttons2 & 0x01);         // L1 button
+        r1Button.update(report.buttons2 & 0x02);         // R1 button
+        l3Button.update(report.buttons2 & 0x40);         // L3 (left stick click)
+        r3Button.update(report.buttons2 & 0x80);         // R3 (right stick click)
+        shareButton.update(report.buttons2 & 0x10);      // Share button
+        optionsButton.update(report.buttons2 & 0x20);    // Options button
+
+        // Handle button presses
+        handleButtonInputs();
+        
+        // Handle analog sticks
+        handleAnalogInputs(report);
+        
+        // Handle D-pad
+        handleDpadInput(report.buttons1 & 0x0F);
+        
+        // Handle triggers
+        handleTriggers(report.leftTrigger, report.rightTrigger);
+    }
+
+private:
+    void handleButtonInputs() {
+        // Cross button - Left mouse click
+        if (crossButton.justPressed()) {
+            simulateMouseClick(MOUSEEVENTF_LEFTDOWN);
+            std::cout << "Cross pressed - Left click\n";
+        }
+        if (crossButton.justReleased()) {
+            simulateMouseClick(MOUSEEVENTF_LEFTUP);
+        }
+
+        // Circle button - Right mouse click
+        if (circleButton.justPressed()) {
+            simulateMouseClick(MOUSEEVENTF_RIGHTDOWN);
+            std::cout << "Circle pressed - Right click\n";
+        }
+        if (circleButton.justReleased()) {
+            simulateMouseClick(MOUSEEVENTF_RIGHTUP);
+        }
+
+        // Square button - Space key
+        if (squareButton.justPressed()) {
+            simulateKeyPress(VK_SPACE, true);
+            std::cout << "Square pressed - Space key\n";
+        }
+        if (squareButton.justReleased()) {
+            simulateKeyPress(VK_SPACE, false);
+        }
+
+        // Triangle button - Enter key
+        if (triangleButton.justPressed()) {
+            simulateKeyPress(VK_RETURN, true);
+            std::cout << "Triangle pressed - Enter key\n";
+        }
+        if (triangleButton.justReleased()) {
+            simulateKeyPress(VK_RETURN, false);
+        }
+
+        // L1 - Shift key
+        if (l1Button.justPressed()) {
+            simulateKeyPress(VK_LSHIFT, true);
+            std::cout << "L1 pressed - Left Shift\n";
+        }
+        if (l1Button.justReleased()) {
+            simulateKeyPress(VK_LSHIFT, false);
+        }
+
+        // R1 - Control key
+        if (r1Button.justPressed()) {
+            simulateKeyPress(VK_LCONTROL, true);
+            std::cout << "R1 pressed - Left Ctrl\n";
+        }
+        if (r1Button.justReleased()) {
+            simulateKeyPress(VK_LCONTROL, false);
+        }
+
+        // Share button - Tab key
+        if (shareButton.justPressed()) {
+            simulateKeyPress(VK_TAB, true);
+            std::cout << "Share pressed - Tab key\n";
+        }
+        if (shareButton.justReleased()) {
+            simulateKeyPress(VK_TAB, false);
+        }
+
+        // Options button - Escape key
+        if (optionsButton.justPressed()) {
+            simulateKeyPress(VK_ESCAPE, true);
+            std::cout << "Options pressed - Escape key\n";
+        }
+        if (optionsButton.justReleased()) {
+            simulateKeyPress(VK_ESCAPE, false);
+        }
+
+        // L3 - Middle mouse click
+        if (l3Button.justPressed()) {
+            simulateMouseClick(MOUSEEVENTF_MIDDLEDOWN);
+            std::cout << "L3 pressed - Middle click\n";
+        }
+        if (l3Button.justReleased()) {
+            simulateMouseClick(MOUSEEVENTF_MIDDLEUP);
+        }
+    }
+
+    void handleAnalogInputs(const PS4ControllerReport& report) {
+        // Right stick controls mouse movement
+        float rightX = normalizeStick(report.rightStickX);
+        float rightY = normalizeStick(report.rightStickY);
+
+        if (std::abs(rightX) > deadzone || std::abs(rightY) > deadzone) {
+            // Apply smoothing
+            rightX = (rightX + prevRightX) * 0.5f;
+            rightY = (rightY + prevRightY) * 0.5f;
+            
+            int deltaX = static_cast<int>(rightX * mouseSensitivity * 10);
+            int deltaY = static_cast<int>(rightY * mouseSensitivity * 10);
+            
+            simulateMouseMove(deltaX, deltaY);
+        }
+        
+        prevRightX = rightX;
+        prevRightY = rightY;
+
+        // Left stick can be used for WASD movement
+        float leftX = normalizeStick(report.leftStickX);
+        float leftY = normalizeStick(report.leftStickY);
+        
+        handleWASDMovement(leftX, leftY);
+    }
+
+    void handleWASDMovement(float x, float y) {
+        static bool wPressed = false, aPressed = false, sPressed = false, dPressed = false;
+        
+        // Handle horizontal movement (A/D)
+        if (x < -deadzone && !aPressed) {
+            simulateKeyPress('A', true);
+            aPressed = true;
+            if (dPressed) {
+                simulateKeyPress('D', false);
+                dPressed = false;
+            }
+        } else if (x > deadzone && !dPressed) {
+            simulateKeyPress('D', true);
+            dPressed = true;
+            if (aPressed) {
+                simulateKeyPress('A', false);
+                aPressed = false;
+            }
+        } else if (std::abs(x) <= deadzone) {
+            if (aPressed) {
+                simulateKeyPress('A', false);
+                aPressed = false;
+            }
+            if (dPressed) {
+                simulateKeyPress('D', false);
+                dPressed = false;
+            }
+        }
+
+        // Handle vertical movement (W/S)
+        if (y < -deadzone && !wPressed) {
+            simulateKeyPress('W', true);
+            wPressed = true;
+            if (sPressed) {
+                simulateKeyPress('S', false);
+                sPressed = false;
+            }
+        } else if (y > deadzone && !sPressed) {
+            simulateKeyPress('S', true);
+            sPressed = true;
+            if (wPressed) {
+                simulateKeyPress('W', false);
+                wPressed = false;
+            }
+        } else if (std::abs(y) <= deadzone) {
+            if (wPressed) {
+                simulateKeyPress('W', false);
+                wPressed = false;
+            }
+            if (sPressed) {
+                simulateKeyPress('S', false);
+                sPressed = false;
+            }
+        }
+    }
+
+    void handleDpadInput(uint8_t dpad) {
+        static int lastDpad = 8; // neutral
+        
+        if (dpad != lastDpad) {
+            // Release previous arrow key
+            switch (lastDpad) {
+                case 0: simulateKeyPress(VK_UP, false); break;
+                case 2: simulateKeyPress(VK_RIGHT, false); break;
+                case 4: simulateKeyPress(VK_DOWN, false); break;
+                case 6: simulateKeyPress(VK_LEFT, false); break;
+            }
+            
+            // Press new arrow key
+            switch (dpad) {
+                case 0: // Up
+                    simulateKeyPress(VK_UP, true);
+                    std::cout << "D-pad Up - Arrow Up\n";
+                    break;
+                case 2: // Right
+                    simulateKeyPress(VK_RIGHT, true);
+                    std::cout << "D-pad Right - Arrow Right\n";
+                    break;
+                case 4: // Down
+                    simulateKeyPress(VK_DOWN, true);
+                    std::cout << "D-pad Down - Arrow Down\n";
+                    break;
+                case 6: // Left
+                    simulateKeyPress(VK_LEFT, true);
+                    std::cout << "D-pad Left - Arrow Left\n";
+                    break;
+            }
+            lastDpad = dpad;
+        }
+    }
+
+    void handleTriggers(uint8_t leftTrigger, uint8_t rightTrigger) {
+        static bool l2Pressed = false, r2Pressed = false;
+        const uint8_t threshold = 50;
+        
+        // L2 trigger - Mouse wheel up
+        if (leftTrigger > threshold && !l2Pressed) {
+            simulateMouseWheel(1);
+            l2Pressed = true;
+            std::cout << "L2 trigger - Mouse wheel up\n";
+        } else if (leftTrigger <= threshold) {
+            l2Pressed = false;
+        }
+        
+        // R2 trigger - Mouse wheel down
+        if (rightTrigger > threshold && !r2Pressed) {
+            simulateMouseWheel(-1);
+            r2Pressed = true;
+            std::cout << "R2 trigger - Mouse wheel down\n";
+        } else if (rightTrigger <= threshold) {
+            r2Pressed = false;
+        }
+    }
+
+    float normalizeStick(uint8_t value) {
+        return (static_cast<float>(value) - 128.0f) / 127.0f;
+    }
+
+    void simulateMouseClick(DWORD flags) {
+        INPUT input = {};
+        input.type = INPUT_MOUSE;
+        input.mi.dwFlags = flags;
+        SendInput(1, &input, sizeof(INPUT));
+    }
+
+    void simulateMouseMove(int deltaX, int deltaY) {
+        INPUT input = {};
+        input.type = INPUT_MOUSE;
+        input.mi.dwFlags = MOUSEEVENTF_MOVE;
+        input.mi.dx = deltaX;
+        input.mi.dy = deltaY;
+        SendInput(1, &input, sizeof(INPUT));
+    }
+
+    void simulateMouseWheel(int direction) {
+        INPUT input = {};
+        input.type = INPUT_MOUSE;
+        input.mi.dwFlags = MOUSEEVENTF_WHEEL;
+        input.mi.mouseData = direction * WHEEL_DELTA;
+        SendInput(1, &input, sizeof(INPUT));
+    }
+
+    void simulateKeyPress(WORD vkCode, bool keyDown) {
+        INPUT input = {};
+        input.type = INPUT_KEYBOARD;
+        input.ki.wVk = vkCode;
+        input.ki.dwFlags = keyDown ? 0 : KEYEVENTF_KEYUP;
+        SendInput(1, &input, sizeof(INPUT));
+    }
+};
+
+// Console helper class (simplified for the mapper)
 class Console {
 public:
     Console() : hOut(GetStdHandle(STD_OUTPUT_HANDLE)) {
         if (hOut == INVALID_HANDLE_VALUE) throw std::runtime_error("Failed to get console output handle");
-        // save existing cursor info
-        CONSOLE_CURSOR_INFO info {};
-        if (GetConsoleCursorInfo(hOut, &info)) savedCursorInfo = info;
         hideCursor();
     }
 
-    ~Console() {
-        // restore cursor
-        if (hOut != INVALID_HANDLE_VALUE) SetConsoleCursorInfo(hOut, &savedCursorInfo);
-    }
-
     void clear() {
-        COORD topLeft {0, 0};
-        CONSOLE_SCREEN_BUFFER_INFO csbi;
-        if (!GetConsoleScreenBufferInfo(hOut, &csbi)) return;
-        DWORD len = static_cast<DWORD>(csbi.dwSize.X) * csbi.dwSize.Y;
-        DWORD written = 0;
-        FillConsoleOutputCharacterA(hOut, ' ', len, topLeft, &written);
-        FillConsoleOutputAttribute(hOut, csbi.wAttributes, len, topLeft, &written);
-        SetConsoleCursorPosition(hOut, topLeft);
-    }
-
-    void setCursor(int x, int y) {
-        COORD coord { static_cast<SHORT>(x), static_cast<SHORT>(y) };
-        SetConsoleCursorPosition(hOut, coord);
+        system("cls"); // Simple clear for this version
     }
 
     void hideCursor() {
@@ -80,37 +383,20 @@ public:
         SetConsoleCursorInfo(hOut, &info);
     }
 
-    void writeAt(int x, int y, const std::string& s) {
-        setCursor(x, y);
-        std::cout << s;
-    }
-
-    static std::string bytesToHex(const uint8_t* data, size_t len) {
-        std::ostringstream ss;
-        ss << std::hex << std::setfill('0');
-        for (size_t i = 0; i < len; ++i) {
-            ss << std::setw(2) << static_cast<int>(data[i]) << ' ';
-        }
-        ss << std::dec;
-        return ss.str();
-    }
-
 private:
     HANDLE hOut;
-    CONSOLE_CURSOR_INFO savedCursorInfo {};
 };
 
-class PS4Visualizer {
+class PS4InputMapper {
 public:
-    PS4Visualizer() {
+    PS4InputMapper() {
         registerWindowClass();
         createMessageWindow();
         registerRawInput();
         console.clear();
     }
 
-    ~PS4Visualizer() {
-        // unregister raw input listener
+    ~PS4InputMapper() {
         RAWINPUTDEVICE removeRid{};
         removeRid.usUsagePage = 0x01;
         removeRid.usUsage = 0x05;
@@ -129,7 +415,6 @@ public:
         bool done = false;
 
         while (!done) {
-            // keyboard: ESC to quit
             if (_kbhit()) {
                 int ch = _getch();
                 if (ch == 27) { // ESC
@@ -138,19 +423,16 @@ public:
                 }
             }
 
-            // process windows messages
             while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
                 TranslateMessage(&msg);
                 DispatchMessage(&msg);
             }
 
-            // small sleep to reduce CPU usage (~60 FPS)
             std::this_thread::sleep_for(std::chrono::milliseconds(16));
         }
     }
 
 private:
-    // Window / raw input setup
     void registerWindowClass() {
         WNDCLASSW wc{};
         wc.lpfnWndProc = WindowProc;
@@ -167,16 +449,15 @@ private:
     }
 
     void createMessageWindow() {
-        // create an invisible message-only window
-        hwnd = CreateWindowW(windowClassName.c_str(), L"PS4RawInputHiddenWindow",
+        hwnd = CreateWindowW(windowClassName.c_str(), L"PS4InputMapperHiddenWindow",
                              0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, GetModuleHandle(nullptr), this);
         if (!hwnd) throw std::runtime_error("CreateWindow failed");
     }
 
     void registerRawInput() {
         RAWINPUTDEVICE rid{};
-        rid.usUsagePage = 0x01; // Generic Desktop
-        rid.usUsage = 0x05;     // Game Pad
+        rid.usUsagePage = 0x01;
+        rid.usUsage = 0x05;
         rid.dwFlags = RIDEV_INPUTSINK;
         rid.hwndTarget = hwnd;
 
@@ -187,13 +468,13 @@ private:
     }
 
     static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-        PS4Visualizer* self = nullptr;
+        PS4InputMapper* self = nullptr;
         if (msg == WM_CREATE) {
             CREATESTRUCTW* cs = reinterpret_cast<CREATESTRUCTW*>(lParam);
-            self = reinterpret_cast<PS4Visualizer*>(cs->lpCreateParams);
+            self = reinterpret_cast<PS4InputMapper*>(cs->lpCreateParams);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
         } else {
-            self = reinterpret_cast<PS4Visualizer*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+            self = reinterpret_cast<PS4InputMapper*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
         }
 
         if (self) return self->handleMessage(msg, wParam, lParam);
@@ -221,175 +502,50 @@ private:
         RAWINPUT* raw = reinterpret_cast<RAWINPUT*>(buffer.data());
         if (raw->header.dwType != RIM_TYPEHID) return;
 
-        RID_DEVICE_INFO rdi{};
-        rdi.cbSize = sizeof(rdi);
-        // (optional) We could call GetRawInputDeviceInfo to get more info if needed
-
-        // raw->data.hid.dwSizeHid is the size of a single HID report; dwCount is number of reports
         if (raw->data.hid.dwSizeHid >= sizeof(PS4ControllerReport) && raw->data.hid.dwCount >= 1) {
             PS4ControllerReport report{};
-            // copy the first report
             std::memcpy(&report, raw->data.hid.bRawData, sizeof(report));
 
-            {
-                std::lock_guard<std::mutex> lk(stateMutex);
-                lastReport = report;
-                controllerConnected = true;
-            }
-            updateDisplay();
+            // Process the input through our mapper
+            inputMapper.processInput(report);
         }
     }
 
-    // Rendering helpers
     void printHeader() {
-        console.setCursor(0, 0);
-        std::cout << "=== PS4 Controller Raw Input Visualizer (refactored) ===\n";
-        std::cout << "Press ESC to exit. Make sure controller is connected (USB/Bluetooth).\n\n";
+        std::cout << "=== PS4 Controller to Mouse/Keyboard Mapper ===\n";
+        std::cout << "Press ESC to exit. Controller mapping active:\n\n";
+        std::cout << "Button Mappings:\n";
+        std::cout << "  Cross (X)     -> Left Mouse Click\n";
+        std::cout << "  Circle (O)    -> Right Mouse Click\n";
+        std::cout << "  Square        -> Spacebar\n";
+        std::cout << "  Triangle      -> Enter\n";
+        std::cout << "  L1            -> Left Shift\n";
+        std::cout << "  R1            -> Left Ctrl\n";
+        std::cout << "  L3 (L-stick)  -> Middle Mouse Click\n";
+        std::cout << "  Share         -> Tab\n";
+        std::cout << "  Options       -> Escape\n\n";
+        std::cout << "Analog Controls:\n";
+        std::cout << "  Right Stick   -> Mouse Movement\n";
+        std::cout << "  Left Stick    -> WASD Movement\n";
+        std::cout << "  L2 Trigger    -> Mouse Wheel Up\n";
+        std::cout << "  R2 Trigger    -> Mouse Wheel Down\n";
+        std::cout << "  D-pad         -> Arrow Keys\n\n";
+        std::cout << "Status: Ready for input...\n\n";
         std::cout.flush();
-    }
-
-    void updateDisplay() {
-        console.clear();
-        printHeader();
-
-        std::optional<PS4ControllerReport> snapshot;
-        {
-            std::lock_guard<std::mutex> lk(stateMutex);
-            snapshot = lastReport;
-        }
-
-        if (!snapshot.has_value()) {
-            console.writeAt(0, 4, "Waiting for controller data...");
-            return;
-        }
-
-        const PS4ControllerReport& r = snapshot.value();
-
-        drawStick(0, 4, r.leftStickX, r.leftStickY, "Left");
-        drawStick(30, 4, r.rightStickX, r.rightStickY, "Right");
-
-        drawTrigger(60, 4, r.leftTrigger, "L2");
-        drawTrigger(60, 5, r.rightTrigger, "R2");
-
-        console.writeAt(60, 7, "Battery: " + padNumber((int)r.battery, 3));
-
-        drawButtons(0, 15, r);
-
-        // raw hex dump (first N bytes of the report)
-        constexpr size_t HEX_DUMP_BYTES = 24;
-        console.writeAt(0, 18, "Raw Data: " + Console::bytesToHex(reinterpret_cast<const uint8_t*>(&r), min(sizeof(r), HEX_DUMP_BYTES)));
-    }
-
-    void drawStick(int x, int y, uint8_t rawX, uint8_t rawY, const std::string& name) {
-        // scale to a small ascii grid
-        constexpr int GRID_W = 11; // -5 .. +5
-        constexpr int GRID_H = 5;  // -2 .. +2
-        constexpr int HALF_W = 5;
-        constexpr int HALF_H = 2;
-
-        console.writeAt(x, y, name + " Stick:");
-
-        // normalize from [0..255] to [-1..+1]
-        auto norm = [](uint8_t v) -> float {
-            // center is approximately 128
-            return (static_cast<int>(v) - 128) / 127.0f; // [-1,1]
-        };
-
-        float nx = norm(rawX);
-        float ny = norm(rawY);
-
-        int posX = static_cast<int>(std::round(nx * HALF_W));
-        int posY = static_cast<int>(std::round(ny * HALF_H));
-
-        for (int row = -HALF_H; row <= HALF_H; ++row) {
-            std::string line;
-            line.reserve(GRID_W);
-            for (int col = -HALF_W; col <= HALF_W; ++col) {
-                if (col == posX && row == posY) line += "@"; // current stick position
-                else if (col == 0 && row == 0) line += "+"; // center
-                else line += ".";
-            }
-            console.writeAt(x, y + 1 + (row + HALF_H), line);
-        }
-
-        console.writeAt(x, y + 1 + GRID_H, "X: " + padNumber((int)rawX, 3) + " Y: " + padNumber((int)rawY, 3));
-    }
-
-    void drawTrigger(int x, int y, uint8_t value, const std::string& name) {
-        int bars = (value * 10) / 255;
-        std::ostringstream ss;
-        ss << name << ": [";
-        for (int i = 0; i < 10; ++i) ss << (i < bars ? "#" : ".");
-        ss << "] " << std::setw(3) << (int)value;
-        console.writeAt(x, y, ss.str());
-    }
-
-    void drawButtons(int x, int y, const PS4ControllerReport& r) {
-        // Face buttons (upper nibble of buttons1)
-        std::ostringstream ss1;
-        ss1 << "Buttons: ";
-        ss1 << (r.buttons1 & 0x10 ? "[SQR] " : " SQR  ");
-        ss1 << (r.buttons1 & 0x20 ? "[CRO] " : " CRO  ");
-        ss1 << (r.buttons1 & 0x40 ? "[CIR] " : " CIR  ");
-        ss1 << (r.buttons1 & 0x80 ? "[TRI] " : " TRI  ");
-        console.writeAt(x, y, ss1.str());
-
-        // D-Pad (lower nibble)
-        uint8_t dpad = r.buttons1 & 0x0F;
-        std::string dpadStr = dpadToLabel(dpad);
-        console.writeAt(x, y + 1, "D-Pad: " + dpadStr);
-
-        // Shoulders and stick clicks
-        std::ostringstream ss2;
-        ss2 << (r.buttons2 & 0x01 ? "[L1] " : " L1  ");
-        ss2 << (r.buttons2 & 0x02 ? "[R1] " : " R1  ");
-        ss2 << (r.buttons2 & 0x40 ? "[L3] " : " L3  ");
-        ss2 << (r.buttons2 & 0x80 ? "[R3] " : " R3  ");
-        ss2 << " | ";
-        ss2 << (r.buttons3 & 0x01 ? "[PS] " : " PS  ");
-        ss2 << (r.buttons3 & 0x02 ? "[PAD] " : " PAD  ");
-        ss2 << (r.buttons2 & 0x10 ? "[SHARE] " : " SHARE  ");
-        ss2 << (r.buttons2 & 0x20 ? "[OPTIONS] " : " OPTIONS  ");
-
-        console.writeAt(x, y + 2, ss2.str());
-    }
-
-    static std::string dpadToLabel(uint8_t d) {
-        // 0..7 = directions, 8 = neutral (per many DualShock reports)
-        switch (d) {
-            case 0: return "Up";
-            case 1: return "Up-Right";
-            case 2: return "Right";
-            case 3: return "Down-Right";
-            case 4: return "Down";
-            case 5: return "Down-Left";
-            case 6: return "Left";
-            case 7: return "Up-Left";
-            default: return "Neutral";
-        }
-    }
-
-    static std::string padNumber(int v, int w) {
-        std::ostringstream ss;
-        ss << std::setw(w) << v;
-        return ss.str();
     }
 
 private:
     HWND hwnd = nullptr;
-    const std::wstring windowClassName = L"PS4RawInputClassRefactored";
-
-    std::mutex stateMutex;
-    std::optional<PS4ControllerReport> lastReport;
-    bool controllerConnected = false;
-
+    const std::wstring windowClassName = L"PS4InputMapperClass";
+    InputMapper inputMapper;
     Console console;
 };
 
 int main() {
     try {
-        PS4Visualizer viz;
-        viz.run();
+        std::cout << "Starting PS4 Controller to Mouse/Keyboard Mapper...\n";
+        PS4InputMapper mapper;
+        mapper.run();
     } catch (const std::exception& ex) {
         std::cerr << "Fatal error: " << ex.what() << std::endl;
         return 1;
