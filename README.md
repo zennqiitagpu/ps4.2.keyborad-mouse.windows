@@ -39,7 +39,6 @@ Buttons:  SQR   CRO  [CIR]  TRI
 D-Pad: Neutral
  L1   R1   L3   R3   |  PS   PAD   SHARE   OPTIONS
 Raw Data: 01 34 3d eb cb 48 08 58 00 ae 4e c5 00 c7 ff fe ff fb ff 54 03 29 21 12
-
 ```
 
 ---
